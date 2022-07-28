@@ -1,0 +1,606 @@
+---
+title: "Jimenez Palmer Coral Paper Analysis Version 2.0"
+author: "Xav Harrison"
+date: "05/07/2022"
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# SECTION 1 SETUP  
+
+## 1.1 Libraries
+```{r}
+  #### LIBRARIES
+        library(tidyverse)
+        library(lme4)
+        library(brms)
+        library(MuMIn)
+
+        options(mc.cores = parallel::detectCores())
+    
+##### GLOBAL PLOT OPTIONS
+             plotopts<-theme(axis.text=element_text(size=18),axis.title=element_text(size=20),strip.text = element_text(size=20),plot.margin = margin(b=1, r=1, t=2, l=1, "lines"),legend.text=element_text(size=15),legend.title=element_text(size=15)) 
+           
+```
+
+## 1.2 Data Files
+
+```{r}
+      #### Temperature Data
+        tempdat<-read.csv('sst.csv',header=T)
+        
+      ### ALL CORAL DATA (6 sites)
+        allcoral<-read.csv('Total percent coral cover_all.csv',header=T)  
+        
+      ### Coral Species Data
+        coralspec<-read.csv('spprop_all.csv',header=T)
+        
+        
+      ### Monthly Coral SST 
+        monsst_81_20<-read.csv('monSST_Papagayo_1981_2020.csv',header=T)
+
+
+```
+
+## 1.3 Data Housekeeping 
+
+```{r}
+
+     ### Filter Missign Data Rows
+        colnames(allcoral)[1]<-"yr"
+        allcoral<- allcoral %>% filter(!is.na(yr))
+          head(allcoral)
+          
+      ## Filter Golb 
+        allcoral <- allcoral %>% filter(site!="golb")
+        allcoral$site<-factor(allcoral$site)
+        
+      ## Fix Site IDs
+        table(allcoral$site)
+        allcoral$site[which(allcoral$site=="pelada")]<-"pel"
+        allcoral$site<-factor(allcoral$site)
+        
+      ##Code to Fix Depths Here
+        table(allcoral$depth)
+          allcoral$depth<-as.character(allcoral$depth)
+          allcoral$depth[which(allcoral$depth=="11.6-9.2")]<-10  
+          allcoral$depth[which(allcoral$depth=="5-4.7")]<-5  
+          allcoral$depth[which(allcoral$depth=="7-5.5")]<-7  
+          allcoral$depth[which(allcoral$depth=="10.9-7.1")]<-11  
+          allcoral$depth[which(allcoral$depth=="8.5-10")]<-10  
+        table(allcoral$depth)
+        
+      ## Standardise Time
+        allcoral$z_yr<-as.numeric(scale(allcoral$yr))
+        table(allcoral$yr)
+        
+      #Logit Transform Coral Cover For Models 
+        allcoral<- allcoral %>% mutate(cover_prop=coralcov/100)
+        
+        allcoral$cover_prop[which(allcoral$cover_prop==1)]<-0.9999
+        allcoral$cover_prop[which(allcoral$cover_prop==0)]<-0.0001
+        
+        allcoral <- allcoral %>%  mutate(cover_logit= log((cover_prop) / (1-(cover_prop))))
+        
+        #Additional Housekeeping    
+          allcoral$depth<-as.factor(allcoral$depth)
+          allcoral$transect<-as.factor(allcoral$transect)
+          
+  ####### CORAL SPECIES PROPORTIONS     
+      
+          #Remove NAs
+            coralspec<- coralspec[-which(is.na(coralspec$yr)),]
+            head(coralspec)
+            
+            
+  ######### TempDat Add Lag Year
+          tempdat$yr_lag1<-tempdat$yr+1
+     
+          
+
+```
+
+## 1.4. Raw Data Summary 
+
+```{r}
+
+     ################### RAW DATA SUMMARY        
+        coral_summary<- allcoral %>% group_by(site) %>% summarise(ntransect=length(unique(transect)),nyears=length(unique(yr)),nobs=n(),ndepth=length(unique(depth))) 
+coral_summary
+ 
+```
+
+## 1.5 Calculating Mean Coral Per Year and SST / Lagged SST
+
+```{r}
+     #Mean Coral Per Measured Year
+        allcoralmeans<- allcoral %>% group_by(yr,site) %>% summarise(meancoral=mean(cover_logit))
+        nrow(allcoralmeans)
+        with(allcoralmeans,table(yr,site))
+        
+      #Tack on Temperature Data
+        allcoralmeans$sst_min<-tempdat$min[match(allcoralmeans$yr,tempdat$yr)]
+        allcoralmeans$sst_max<-tempdat$max[match(allcoralmeans$yr,tempdat$yr)]
+        allcoralmeans$sst_min_lag1<-tempdat$min[match(allcoralmeans$yr,tempdat$yr_lag1)]
+        allcoralmeans$sst_max_lag1<-tempdat$max[match(allcoralmeans$yr,tempdat$yr_lag1)]
+ 
+
+```
+
+# SECTION 2 MODELLING 
+
+## 2.1 Multivariate Response Models 
+
+### 2.1.1 SST MIN
+```{r}
+
+######  CURRENT YEAR MODELS
+
+    ## SST MIN 
+             sstmin_mod_all_site<- brm(
+              mvbind(sst_min, meancoral) ~ yr +site,
+              data = allcoralmeans )
+    
+                summary(sstmin_mod_all_site)
+                bayes_R2(sstmin_mod_all_site)
+```
+
+
+### 2.1.2 SST MAX
+```{r}
+    ## SST MAX 
+             sstmax_mod_all_site<- brm(
+              mvbind(sst_max, meancoral) ~ yr +site,
+              data = allcoralmeans )
+    
+                summary(sstmax_mod_all_site)
+                bayes_R2(sstmax_mod_all_site) 
+            
+```
+
+### 2.1.3 LAG+1 SST MIN
+```{r}
+############ LAG MODELS 
+        
+    # SST MIN Lag Model
+        coc_sstmin_lag<- brm(mvbind(sst_min_lag1, meancoral) ~ yr + site,
+                             data = allcoralmeans )
+        summary(coc_sstmin_lag)  
+                bayes_R2(coc_sstmin_lag)
+```
+
+### 2.1.4 LAG+1 SST MAX
+```{r}
+    #SST Max Lag Model     
+        coc_sstmax_lag<- brm(mvbind(sst_max_lag1, meancoral) ~ yr + site,
+                             data = allcoralmeans )
+        summary(coc_sstmax_lag)   
+        bayes_R2(coc_sstmax_lag)
+
+```
+
+## 2.2 Bivariate Model Plotting 
+
+### 2.2.1 SST Min Residual Plot
+```{r}
+
+       ########## Plotting 
+        library(RColorBrewer)
+        library(cowplot)
+
+      #Strip 2019 from AllCoral Data
+        allcoralmeans_pre0219<-filter(allcoralmeans,yr<2019)
+        
+      #Site Dataframe 
+        sitedat<-data.frame(siteshort=unique(allcoralmeans$site))
+        sitedat$sitelong<-c("San Pedrito","Cocineras","Golondrina","Lara","Dos Emes","Pelada")
+        
+        sstmin_resid_data<-data.frame(sst_resid=resid(sstmin_mod_all_site)[,,1][,1],coral_resid=resid(sstmin_mod_all_site)[,,2][,1])
+        sstmin_resid_data$site<-allcoralmeans_pre0219$site
+        sstmin_resid_data$site2<-sitedat$sitelong[match(allcoralmeans_pre0219$site,sitedat$siteshort)]
+        sstmin_resid_data$sst_l95<-resid(sstmin_mod_all_site)[,,1][,3]
+        sstmin_resid_data$sst_u95<-resid(sstmin_mod_all_site)[,,1][,4]
+        sstmin_resid_data$coral_l95<-resid(sstmin_mod_all_site)[,,2][,3]
+        sstmin_resid_data$coral_u95<-resid(sstmin_mod_all_site)[,,2][,4]
+   
+      
+      # SST Min Plot With Error Bars 
+        sstminplot_eb1<-ggplot(sstmin_resid_data,aes(x=sst_resid,y=coral_resid)) + geom_errorbar(aes(ymin=coral_l95,ymax=coral_u95),width=0.05,color="gray60") + geom_errorbarh(aes(xmin=sst_l95,xmax=sst_u95),height=0.25,color="gray60")
+        sstminplot_eb2<- sstminplot_eb1 + geom_smooth(method="lm") + geom_point(aes(fill=site2),size=5,shape=21) 
+        sstminplot_eb3<- sstminplot_eb2 + labs(x="Minimum SST Residuals",y="Mean Coral Cover Residuals (Logits)",fill="Site") + theme_bw()+ plotopts + theme(legend.position = "bottom")
+        sstminplot_eb4<- sstminplot_eb3 + scale_fill_brewer(palette = "Set2")
+        sstminplot_eb4   
+        
+        #Save Plpots
+              ggsave2('SST Min Coral Cover Residual Correlation Error Bars.pdf',sstminplot_eb4,width=9,height=7)
+                ggsave2('SST Min Coral Cover Residual Correlation Error Bars.jpeg',sstminplot_eb4,width=9,height=7)
+
+
+```
+
+### 2.2.2 SST MAX Residual Plot
+
+```{r}
+
+     
+      #Extract Residuals      
+        sstmax_resid_data<-data.frame(sst_resid=resid(sstmax_mod_all_site)[,,1][,1],coral_resid=resid(sstmax_mod_all_site)[,,2][,1])
+        sstmax_resid_data$site<-allcoralmeans_pre0219$site
+        sstmax_resid_data$site2<-sitedat$sitelong[match(allcoralmeans_pre0219$site,sitedat$siteshort)]
+        sstmax_resid_data$sst_l95<-resid(sstmax_mod_all_site)[,,1][,3]
+        sstmax_resid_data$sst_u95<-resid(sstmax_mod_all_site)[,,1][,4]
+        sstmax_resid_data$coral_l95<-resid(sstmax_mod_all_site)[,,2][,3]
+        sstmax_resid_data$coral_u95<-resid(sstmax_mod_all_site)[,,2][,4]
+   
+      
+      # SST Min Plot With Error Bars 
+        sstmaxplot_eb1<-ggplot(sstmax_resid_data,aes(x=sst_resid,y=coral_resid)) + geom_errorbar(aes(ymin=coral_l95,ymax=coral_u95),width=0.05,color="gray60") + geom_errorbarh(aes(xmin=sst_l95,xmax=sst_u95),height=0.25,color="gray60")
+        sstmaxplot_eb2<- sstmaxplot_eb1 + geom_smooth(method="lm") + geom_point(aes(fill=site2),size=5,shape=21) 
+        sstmaxplot_eb3<- sstmaxplot_eb2 + labs(x="Maximum SST Residuals",y="Mean Coral Cover Residuals (Logits)",fill="Site") + theme_bw()+ plotopts + theme(legend.position = "bottom")
+        sstmaxplot_eb4<- sstmaxplot_eb3 + scale_fill_brewer(palette = "Set2")
+        sstmaxplot_eb4 
+        
+    ## Save Plots    
+        ggsave2('SST Max Coral Cover Residual Correlation Error Bars.pdf',sstmaxplot_eb4,width=9,height=7)
+        ggsave2('SST Max Coral Cover Residual Correlation Error Bars.jpeg',sstmaxplot_eb4,width=9,height=7)
+
+
+
+```
+
+# SECTION 3: SITE-LEVEL CORAL DECLINE MODELS 
+
+## 3.1 Models
+
+### 3.1.1 Cocineras 
+```{r}
+
+######### COCINERAS 
+
+#Data
+  coc<- allcoral %>% filter(site=="coc") %>% mutate(z_yr=as.numeric(scale(yr)))
+
+   
+      cf1<-lmer(cover_logit ~ poly(z_yr,2)  + (1|depth) + (1|transect) ,data=coc)
+      cf2<-lmer(cover_logit ~ z_yr  + (1|depth) + (1|transect) ,data=coc)
+      model.sel(cf1,cf2)
+```
+
+### 3.1.2 Dos Emes
+
+```{r}
+
+######### DOS EMES
+  mm<- allcoral %>% filter(site=="mm") %>% mutate(z_yr=as.numeric(scale(yr)))
+
+      mf1<-lmer(cover_logit ~ poly(z_yr,2)  + (1|depth) + (1|transect) ,data=mm)
+      mf2<-lmer(cover_logit ~ z_yr  + (1|depth) + (1|transect) ,data=mm)
+      model.sel(mf1,mf2)
+```
+
+### 3.1.3 Lara
+```{r}
+
+######## LARA 
+  lara<- allcoral %>% filter(site=="lara") %>% mutate(z_yr=as.numeric(scale(yr)))
+
+      lf1<-lmer(cover_logit ~ poly(z_yr,2)  + (1|depth) + (1|transect) ,data=lara)
+      lf2<-lmer(cover_logit ~ z_yr  + (1|depth) + (1|transect) ,data=lara)
+      model.sel(lf1,lf2)
+    
+```
+
+### 3.1.4 Golondrina
+```{r}
+########## GOLONDRINA   
+      gol<- allcoral %>% filter(site=="gol") %>% mutate(z_yr=as.numeric(scale(yr)))
+
+      gf1<-lmer(cover_logit ~ poly(z_yr,2)  + (1|depth) + (1|transect) ,data=gol)
+      gf2<-lmer(cover_logit ~ z_yr  + (1|depth) + (1|transect) ,data=gol)
+      model.sel(gf1,gf2)
+```
+
+### 3.1.5 San Pedrito
+
+```{r}
+
+########## SAN PEDRITO   
+      sp<- allcoral %>% filter(site=="sp") %>% mutate(z_yr=as.numeric(scale(yr)))
+
+      sf1<-lmer(cover_logit ~ poly(z_yr,2)  + (1|depth) + (1|transect) ,data=sp)
+      sf2<-lmer(cover_logit ~ z_yr  + (1|depth) + (1|transect) ,data=sp)
+
+      model.sel(sf1,sf2)
+      
+```
+
+### 3.1.6 Pel 
+```{r}
+########## PEL
+     pel<- allcoral %>% filter(site=="pel") %>% mutate(z_yr=as.numeric(scale(yr)))
+
+      pf1<-lmer(cover_logit ~ poly(z_yr,2)  + (1|depth) + (1|transect) ,data=pel)
+      pf2<-lmer(cover_logit ~ z_yr  + (1|depth) + (1|transect) ,data=pel)
+      model.sel(pf1,pf2)
+       
+        
+```
+
+## 3.2 Predictions  
+
+### 3.2.1 Bayesian Version of Each Model 
+
+```{r}
+
+     coc_pred<- brm(cover_logit ~ poly(z_yr,2) + (1|depth) + (1|transect),data=coc,control=list(adapt_delta=0.99),iter=10000,warmup=2000,thin=10)
+     sp_pred<- brm(cover_logit ~ poly(z_yr,2) + (1|depth) + (1|transect),data=sp,control=list(adapt_delta=0.99),iter=10000,warmup=2000,thin=10)
+     mm_pred<- brm(cover_logit ~ poly(z_yr,2) + (1|depth) + (1|transect),data=mm,control=list(adapt_delta=0.99),iter=10000,warmup=2000,thin=10)
+     lara_pred<- brm(cover_logit ~ poly(z_yr,2) + (1|depth) + (1|transect),data=lara,control=list(adapt_delta=0.99,max_treedepth=15),iter=10000,warmup=2000,thin=10)
+     gol_pred<- brm(cover_logit ~ poly(z_yr,2) + (1|depth) + (1|transect),data=gol,control=list(adapt_delta=0.99),iter=10000,warmup=2000,thin=10)
+     pel_pred<- brm(cover_logit ~ poly(z_yr,2) + (1|depth) + (1|transect),data=pel,control=list(adapt_delta=0.99),iter=10000,warmup=2000,thin=10)
+
+
+```
+
+### 3.2.2 Prediction Output
+```{r}
+
+################## PREDICTIONS    
+      
+      ## Prediction Models
+        #  coc_r1; sp_mod1; gol_mod_linear; lara_mod_linear
+      
+    #Back Transform Data
+      coral_vals<- allcoral %>% group_by(site) %>% summarise(meanyr=mean(yr),sdyr=sd(yr))
+      
+     coc_cond<-conditional_effects(coc_pred) 
+     coc_cond<-coc_cond[[1]]
+     coc_cond<- coc_cond %>% mutate(coral_mean=plogis(estimate__),u95=plogis(upper__),l95=plogis(lower__),yr=(z_yr*as.numeric(coral_vals[1,3]) + as.numeric(coral_vals[1,2])),site="Cocineras")
+     
+     sp_cond<-conditional_effects(sp_pred) 
+     sp_cond<-sp_cond[[1]]
+     sp_cond<- sp_cond %>% mutate(coral_mean=plogis(estimate__),u95=plogis(upper__),l95=plogis(lower__),yr=(z_yr*as.numeric(coral_vals[6,3]) + as.numeric(coral_vals[6,2])),site="San Pedrito")
+    
+     gol_cond<-conditional_effects(gol_pred) 
+     gol_cond<-gol_cond[[1]]
+     gol_cond<- gol_cond %>% mutate(coral_mean=plogis(estimate__),u95=plogis(upper__),l95=plogis(lower__),yr=(z_yr*as.numeric(coral_vals[2,3]) + as.numeric(coral_vals[2,2])),site="Golondrina")
+    
+     lara_cond<-conditional_effects(lara_pred) 
+     lara_cond<-lara_cond[[1]]
+     lara_cond<- lara_cond %>% mutate(coral_mean=plogis(estimate__),u95=plogis(upper__),l95=plogis(lower__),yr=(z_yr*as.numeric(coral_vals[3,3]) + as.numeric(coral_vals[3,2])),site="Lara")
+     
+     mm_cond<-conditional_effects(mm_pred) 
+     mm_cond<-mm_cond[[1]]
+     mm_cond<- mm_cond %>% mutate(coral_mean=plogis(estimate__),u95=plogis(upper__),l95=plogis(lower__),yr=(z_yr*as.numeric(coral_vals[4,3]) + as.numeric(coral_vals[4,2])),site="Dos Emes")
+     
+    pel_cond<-conditional_effects(pel_pred) 
+     pel_cond<-pel_cond[[1]]
+     pel_cond<- pel_cond %>% mutate(coral_mean=plogis(estimate__),u95=plogis(upper__),l95=plogis(lower__),yr=(z_yr*as.numeric(coral_vals[5,3]) + as.numeric(coral_vals[5,2])),site="Pelada")
+```
+
+### 3.2.3 Facet Plot of All Corals
+```{r}
+    #Combine
+     coral_predict_combo<-rbind(sp_cond,coc_cond,gol_cond,lara_cond,mm_cond,pel_cond)
+   
+    #Fite Site ID in Full Data
+     coral_predict_combo$site_long<-coral_predict_combo$site
+     coral_site_translate<-data.frame(short=c("coc","sp","gol","lara","mm","pel"),long=c("Cocineras","San Pedrito","Golondrina","Lara","Dos Emes","Pelada"))
+     allcoral$site_long<-coral_site_translate$long[match(allcoral$site,coral_site_translate$short)]
+     
+    #Factor for Correct Plotting Order
+     coral_predict_combo$site_long<-factor(coral_predict_combo$site_long,levels=c("San Pedrito","Cocineras","Golondrina","Lara","Dos Emes","Pelada"))
+     
+    ## Labeller for Facets 
+     dat_text <- data.frame(
+  label = c("A", "B", "C","D","E","F"),
+  site_long=c("San Pedrito","Cocineras","Golondrina","Lara","Dos Emes","Pelada")
+        )
+     
+    #Relabel Facets in Dataframe
+     newsitelabeldf<-data.frame(old=c("San Pedrito","Cocineras","Golondrina","Lara","Dos Emes","Pelada"),new=c("A. San Pedrito","B. Cocineras","C. Golondrina","D. Lara","E. Dos Emes","F. Pelada"))
+coral_predict_combo$newfacet<- newsitelabeldf[,2][match(coral_predict_combo$site_long,newsitelabeldf[,1])]
+allcoral$newfacet<-newsitelabeldf[,2][match(allcoral$site_long,newsitelabeldf[,1])]
+
+  ########### PLOT OF RAW DATA AND PREDICTED VALUES   
+     plotopts<-theme(axis.text=element_text(size=18),axis.title=element_text(size=20),strip.text = element_text(size=25),plot.margin = margin(b=1, r=1, t=2, l=1, "lines"),legend.text=element_text(size=15),legend.title=element_text(size=15)) 
+     
+     coralplot1<-ggplot() 
+     coralplot2<- coralplot1 + geom_ribbon(data=coral_predict_combo,aes(x=yr,ymin=l95,ymax=u95),fill="lightgrey",alpha=0.5) + geom_line(data=coral_predict_combo,aes(x=yr,y=coral_mean)) + facet_wrap(.~newfacet) + scale_x_continuous(n.breaks=15)
+     coralplot3<- coralplot2 + theme_bw() + plotopts +  geom_point(data=allcoral,aes(x=yr,y=cover_prop,fill=newfacet),shape=21,size=5) + scale_fill_brewer(palette="Set2") +guides(fill=F) + labs(y="Proportion Coral Cover",x="Year") + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+     coralplot4<-coralplot3 #+ geom_text(data    = dat_text, mapping = aes(x = -Inf, y = -Inf, label = label),hjust   = -0.5, vjust   = -0.5,size=15)
+     coralplot4
+     
+   ## Save Plots  
+     library(cowplot)
+     ggsave2('Coral Raw Data and Predictions.pdf',coralplot4,width=18,height=12)
+     ggsave2('Coral Raw Data and Predictions.jpeg',coralplot4,width=18,height=12)
+    
+```
+
+
+
+
+# SECTION 4: CORAL COMMUNITY TURNOVER
+
+## 4.1 Data Cleaning 
+```{r}
+
+  ### Fix Site IDs (deprecated - now filtering out Golb subsite)
+        coralspec$oldsite<-coralspec$site
+        # coralspec$site[which(coralspec$site=="golb")]<-"gol"
+        coralspec$site[which(coralspec$site=="Lara")]<-"lara"
+
+  ## Filter Out Golb 
+        coralspec <- coralspec %>% filter(site !="golb")
+        table(coralspec$site)
+
+      ##Code to Fix Depths Here
+        table(coralspec$depth)
+          coralspec$depth<-as.character(coralspec$depth)
+          coralspec$depth[which(coralspec$depth=="11.6-9.2")]<-10  
+          coralspec$depth[which(coralspec$depth=="5-4.7")]<-5  
+          coralspec$depth[which(coralspec$depth=="7-5.5")]<-7  
+          coralspec$depth[which(coralspec$depth=="10.9-7.1")]<-11  
+          coralspec$depth[which(coralspec$depth=="8.5-10")]<-10  
+        table(coralspec$depth)
+        
+        
+    ## Every Row Should Sum to 1 
+        colnames(coralspec)
+        coralspec$propsum<-apply(coralspec[,5:10],1,sum)
+        
+        #write.csv(coralspec,'Coral Species Prop with Sum Proportions.csv')
+        
+```
+
+## 4.2 Group Means in Two Stages 
+```{r}
+
+#Summarise Coral Community Cover By Transect/Site/Year Combo Then By Year / Site
+  coralsum1<- coralspec %>% group_by(site,transect,yr) %>% summarise(poc=mean(poc),pav=mean(pav),por=mean(por),ps=mean(ps),gar=mean(gar),tub=mean(tub)) %>% group_by(site,yr) %>% summarise(poc=mean(poc),pav=mean(pav),por=mean(por),ps=mean(ps),gar=mean(gar),tub=mean(tub)) #%>% transmute(yr=as.factor(yr))
+  head(coralsum1)
+  coralsum1$yr<-as.factor(coralsum1$yr)
+  
+#Pivot Longer
+  coralsum_long<- coralsum1 %>% pivot_longer(cols=poc:tub,names_to = "coralspecies",values_to="proportion")
+  head(coralsum_long)
+  
+#Check Sums Oer Site/Year 
+  coralsum_long %>% group_by(site,yr) %>% summarise(sum=sum(proportion))
+
+```
+
+##4.3 Stacked Bar Plot 
+```{r}
+
+#Long Site Names 
+  coralsum_long$site_long<-sitedat[,2][match(coralsum_long$site,sitedat[,1])]
+
+#Proper Coral Names 
+  coraldat<-data.frame(coralshort=unique(coralsum_long$coralspecies),corallong=c("Pocillopora","Pavona","Porites","Psammocora","Gardineroseris","Tubastrea"))
+    coralsum_long$coral_long<-coraldat[,2][match(coralsum_long$coralspecies,coraldat[,1])]
+    
+ #Factor for Correct Plotting Order
+     coralsum_long$site_long<-factor(coralsum_long$site_long,levels=c("San Pedrito","Cocineras","Golondrina","Lara","Dos Emes","Pelada"))
+     
+  #Numeric Year for Proper Plotting of X Axis   
+    coralsum_long$yr=as.numeric(as.character(coralsum_long$yr))
+
+#Stacked Bar
+  coralstack1<- ggplot(coralsum_long,aes(x=yr,y=proportion,fill=coral_long)) + geom_bar(position = "fill",stat="identity")
+  coralstack2<- coralstack1 + scale_fill_brewer(palette="Dark2") + facet_wrap(.~site_long) +  scale_x_continuous(n.breaks=15)
+  coralstack3<- coralstack2 + theme_bw() + plotopts + labs(fill="Genus",y="Proportion Coral Genus",x="Year") + theme(axis.text.x = element_text(angle=45,vjust = 1, hjust=1),legend.position="bottom",legend.text = element_text(size=20),legend.title=element_text(size=20)) + guides(fill=guide_legend(nrow=2,byrow=TRUE))
+  coralstack3
+  
+  ## Save Plots
+     library(cowplot)
+     ggsave2('Coral Cover Proportions.pdf',coralstack3,width=14,height=10)
+     ggsave2('Coral Cover Proportions.jpeg',coralstack3,width=14,height=10)
+ ```
+
+
+## 4.4 Quick ~Check of Two 'Gol/Golb' Sites
+
+```{r}
+
+#Summarise Coral Community Cover By Transect/Site/Year Combo Then By Year / Site
+  golbsum1<- coralspec %>% filter(oldsite %in% c("golb","gol"))# %>% group_by(site,transect,yr) %>% summarise(poc=mean(poc),pav=mean(pav),por=mean(por),ps=mean(ps),gar=mean(gar),tub=mean(tub)) %>% group_by(site,yr) %>% summarise(poc=mean(poc),pav=mean(pav),por=mean(por),ps=mean(ps),gar=mean(gar),tub=mean(tub)) #%>% transmute(yr=as.factor(yr))
+  head(golbsum1)
+  table(golbsum1$oldsite)
+
+#Pivot Longer
+  golbsum_long<- golbsum1 %>% pivot_longer(cols=poc:tub,names_to = "coralspecies",values_to="proportion")
+  head(golbsum_long)
+  golbsum_long$yr<-factor(golbsum_long$yr)
+  table(golbsum_long$oldsite)
+  
+#Stacked Bar
+  golbstack1<- ggplot(golbsum_long,aes(x=yr,y=proportion,fill=coralspecies)) + geom_bar(position = "fill",stat="identity")
+  golbstack2<- golbstack1 + scale_fill_brewer(palette="Set1") + facet_wrap(.~oldsite) #+  scale_x_continuous(n.breaks=15)
+  golbstack3<- golbstack2 + theme_bw() + plotopts + labs(fill="",y="Proportion Coral Genus",x="Year") + theme(axis.text.x = element_text(angle=45,vjust = 1, hjust=1),legend.position="bottom",legend.text = element_text(size=20),legend.title=element_text(size=20)) + guides(fill=guide_legend(nrow=2,byrow=TRUE))
+  golbstack3
+  
+#Check Sums Oer Site/Year 
+  #coralsum_long %>% group_by(site,yr) %>% summarise(sum=sum(proportion))
+
+```
+
+# SECTION 5: PROPORTION OF MONTHS 
+
+```{r}
+
+## Set Thresholds 
+upper_threshold<-29.7
+lower_threshold<-25.7
+
+############## PLOT OF PROPORTION MONTHS ABOVE OR BELOW THRESHOLDS
+
+            head(monsst_81_20)
+            
+          #Strip Out Year 
+            monsst_81_20$yr<-(unlist(lapply(strsplit(as.character(monsst_81_20$monthyear),"-"),"[",2)))
+            
+          #Clumsy padding of years around the Year 2000 
+            monsst_81_20$yrlong<-ifelse(monsst_81_20$yr>80,paste0("19",monsst_81_20$yr),paste0("20",monsst_81_20$yr))
+            
+          #Summarise
+            tempsum<- monsst_81_20 %>% group_by(yrlong) %>% summarise(above_upper=mean(SST>upper_threshold),below_lower=mean(SST<lower_threshold)) %>% ungroup() #%>% filter(yrlong<20)
+            
+          #Flip to Long Format 
+            tempsum_long<-tempsum %>% pivot_longer(cols=c("above_upper","below_lower"),names_to="trend")
+            
+          #Custom Facet Labels   
+            #trendlabs <- 
+            trendlabs1<-expression(paste("Proportion Months Above 29.7",~degree,"C"))
+            trendlabs2<-expression(paste("Proportion Months Below 25.7",~degree,"C"))
+            trendlabs<-c(trendlabs1,trendlabs2)
+names(trendlabs) <- c("above_upper","below_lower")
+
+          #Suppress Plotting of Zeroes
+            tempsum_long$value_suppress0<-tempsum_long$value
+            tempsum_long$value_suppress0[which(tempsum_long$value==0)]<-NA
+
+          #FACET Plot
+            # tempplot1<-ggplot(tempsum_long,aes(x=yrlong,y=value_suppress0,group=trend))+ geom_point(shape=21,size=5,aes(fill=trend))  + theme_classic()
+            # tempplot2<- tempplot1 + facet_grid(trend~.,label='label_parsed') + labs(x="Year",y="Proportion Months Breaching Threshold Temperature")
+            # tempplot3<-  tempplot2 + plotopts + theme(axis.text.x = element_text(angle=45,hjust=1)) + guides(colour=FALSE)
+            # tempplot3
+            # ggsave2('Average Prop Months Above Temp.pdf',tempplot3,width=15,height=8)
+            
+            
+      ### Alternative way of Plotting 
+            #expression(paste("Proportion Months",~degree,"C"))
+            
+          tempsum_long$trend<-factor(tempsum_long$trend)
+          library(scales)
+          abovelab<- expression("Proportion Months Above 29.7",~degree,"C")
+          belowlab<-expression("Proportion Months Below 25.7",~degree,"C")
+          
+  #         tempsum_long = tempsum_long %>% 
+  # mutate(trend_code = recode_factor(trend, "above_upper" = abovelab, "below_lower" = belowlab))  
+  #           
+            # tempplot1<-ggplot(tempsum_long,aes(x=yrlong,y=value,group=trend))+ geom_line(aes(colour=trend)) + geom_point(size=5,shape=21,fill="white") + theme_bw() 
+            # tempplot2<- tempplot1 + labs(x="Year",y="Proportion of Months",col=expression(paste("Temperature Breach",~degree,"C")))
+            # tempplot3<-  tempplot2 + plotopts + theme(axis.text.x = element_text(angle=45,hjust=1),legend.position="top") + scale_colour_manual(labels=c("Below 25.7","Above 29.7"),breaks=c("below_lower","above_upper"),values=c("blue","red"))
+            # tempplot3
+            # 
+            # #ggsave2('Temperature Threshold Graph v2.pdf',tempplot3,width=12,height=8)
+            # 
+            
+            
+        ###### Version 2 of Above Following Peer Review July 2022
+            tempplot_new1<-ggplot(tempsum_long,aes(x=as.numeric(yrlong),y=value_suppress0,group=trend)) + geom_point(size=8,shape=21,aes(fill=trend)) + theme_bw() 
+            tempplot_new2<- tempplot_new1 + labs(x="Year",y="Proportion of Months",fill=expression(paste("Temperature Breach",~degree,"C")))
+            tempplot_new3<-  tempplot_new2 + plotopts + theme(axis.text.x = element_text(angle=45,hjust=1),legend.position="top") + scale_fill_manual(labels=c("Below 25.7","Above 29.7"),breaks=c("below_lower","above_upper"),values=c("dodgerblue","indianred1"))
+            tempplot_new4<- tempplot_new3 + scale_x_continuous(breaks=seq(1981,2019,2))
+            tempplot_new4
+            ggsave2('Temperature Threshold Graph v3 Jul22 PostReview.pdf',tempplot_new4,width=10,height=7)
+
+```
